@@ -1,0 +1,268 @@
+{
+  "name": "Topic 11 - Database Design for Automation (SQLite, PostgreSQL & MySQL)",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -16
+      ],
+      "id": "092740ba-ec7f-4921-8437-07033a224568",
+      "name": "Manual_Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Relational Database Engine Simulation inside n8n static data\nconst staticData = $getWorkflowStaticData('global');\n// 1. DDL: Create Tables & Constraints\nstaticData.tables = staticData.tables || {};\nstaticData.tables.customers = [\n{ customerId: \"CUST-001\", name: \"Acme Corp\", creditLimit: 5000.00, currentBalance: 1200.00 },\n{ customerId: \"CUST-002\", name: \"Globex Inc\", creditLimit: 500.00, currentBalance: 450.00 }\n];\nstaticData.tables.orders = [];\nstaticData.tables.order_items = [];\nreturn {\njson: {\nstatus: \"DATABASE_INITIALIZED\",\nschema: {\ntables: [\"customers\", \"orders\", \"order_items\"],\nconstraints: [\"FK_order_items_orders\", \"CHECK_credit_limit\"],\nindexes: [\"idx_orders_customer\", \"idx_items_order\"]\n},\ntimestamp: new Date().toISOString()\n}\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        -16
+      ],
+      "id": "f1e78257-0874-49ea-aaa5-7f4044de8414",
+      "name": "Code_InitRelationalDB"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n{\njson: {\norderId: \"ORD-DB-5001\",\ncustomerId: \"CUST-101\",\norderDate: new Date().toISOString(),\nlineItems: [\n{ sku: \"SKU-SRV-01\", description: \"Cloud Managed Server\", quantity: 2, unitPrice: 450.00 },\n{ sku: \"SKU-LIC-02\", description: \"Enterprise Security Seat\", quantity: 5, unitPrice: 75.00 }\n]\n}\n}\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        -16
+      ],
+      "id": "b2bf9b9b-7119-4eb6-a217-586eb455237e",
+      "name": "Code_StageIncomingOrder"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.orders = staticData.orders || [];\nconst order = $input.item.json;\nconst totalAmount = (order.lineItems || []).reduce((acc, it) => acc + (it.quantity * it.unitPrice), 0);\nconst orderRecord = {\norderId: order.orderId,\ncustomerId: order.customerId,\norderDate: order.orderDate,\ntotalAmount: totalAmount,\nstatus: \"PENDING\"\n};\nstaticData.orders.push(orderRecord);\nreturn {\njson: {\n...order,\nheaderInserted: true,\ntotalAmount: totalAmount\n}\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        -16
+      ],
+      "id": "ae96866f-24db-4086-92b9-02a49e2601cc",
+      "name": "Code_InsertOrderHeader"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.orderItems = staticData.orderItems || [];\nconst order = $input.item.json;\nconst lineItems = order.lineItems || [];\nconst insertedItems = lineItems.map((it, idx) => {\nconst record = {\nitemId: `ITEM-${order.orderId}-${idx + 1}`,\norderId: order.orderId,\nsku: it.sku,\ndescription: it.description,\nquantity: it.quantity,\nunitPrice: it.unitPrice,\nlineTotal: Number((it.quantity * it.unitPrice).toFixed(2))\n};\nstaticData.orderItems.push(record);\nreturn record;\n});\nreturn {\njson: {\norderId: order.orderId,\ncustomerId: order.customerId,\ntotalAmount: order.totalAmount,\nitemsCount: insertedItems.length,\nitems: insertedItems\n}\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -16
+      ],
+      "id": "e26582fe-bdf5-4d6a-90ed-b2dc642bc9f7",
+      "name": "Code_InsertOrderItems"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst staticData = $getWorkflowStaticData('global');\n\nstaticData.customers = staticData.customers || [\n  {\n    customerId: \"CUST-101\",\n    name: \"Apex Global\",\n    balance: 5000,\n    creditLimit: 10000\n  }\n];\n\nstaticData.orders = staticData.orders || [];\nstaticData.orderItems = staticData.orderItems || [];\n\n// Get incoming order\nconst order = $input.item.json;\n\n// Find customer\nconst customer = staticData.customers.find(\n  c => c.customerId === order.customerId\n);\n\n// Customer not found\nif (!customer) {\n\n  // Remove pending parent order\n  staticData.orders = staticData.orders.filter(\n    o => o.orderId !== order.orderId\n  );\n\n  // Remove child order items\n  staticData.orderItems = staticData.orderItems.filter(\n    i => i.orderId !== order.orderId\n  );\n\n  return {\n    json: {\n      transactionStatus: \"ROLLED_BACK\",\n      reason: \"CUSTOMER_NOT_FOUND\",\n      orderId: order.orderId,\n      customerId: order.customerId\n    }\n  };\n}\n\n// Calculate projected balance\nconst newBalance = Number(\n  (customer.currentBalance + order.totalAmount).toFixed(2)\n);\n\n// Check credit limit\nif (newBalance > customer.creditLimit) {\n\n  // Rollback parent order\n  staticData.orders = staticData.orders.filter(\n    o => o.orderId !== order.orderId\n  );\n\n  // Rollback child order items\n  staticData.orderItems = staticData.orderItems.filter(\n    i => i.orderId !== order.orderId\n  );\n\n  return {\n    json: {\n      transactionStatus: \"ROLLED_BACK\",\n      reason: \"CREDIT_LIMIT_EXCEEDED\",\n      orderId: order.orderId,\n      customerId: customer.customerId,\n      currentBalance: customer.currentBalance,\n      creditLimit: customer.creditLimit,\n      attemptedCharge: order.totalAmount,\n      projectedBalance: newBalance\n    }\n  };\n}\n\n// Commit transaction\ncustomer.currentBalance = newBalance;\n\n// Update order status\nconst committedOrder = staticData.orders.find(\n  o => o.orderId === order.orderId\n);\n\nif (committedOrder) {\n  committedOrder.status = \"COMMITTED\";\n}\n\nreturn {\n  json: {\n    transactionStatus: \"COMMITTED\",\n    orderId: order.orderId,\n    customerId: customer.customerId,\n    updatedBalance: newBalance,\n    creditLimit: customer.creditLimit,\n    committedAt: new Date().toISOString()\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        -16
+      ],
+      "id": "bcfcfaa4-f42c-4657-90c2-2949803325ed",
+      "name": "Code_UpdateCustomerCredit"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "606f1434-7e1a-43e1-a847-f5b120a95abb",
+              "leftValue": "={{ $json.transactionStatus }}",
+              "rightValue": "COMMITTED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1328,
+        -16
+      ],
+      "id": "396d86d3-a6b0-4e37-85d5-97d6ab1fd022",
+      "name": "IF_TransactionSucceeded"
+    },
+    {
+      "parameters": {
+        "jsCode": "{ json: { status: \"TRANSACTION_ABORTED_SAFELY\", details: $json } }."
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        80
+      ],
+      "id": "3a0bb7fa-9304-49ac-acc5-70a95b54a369",
+      "name": "Log_RollbackAudit"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst staticData = $getWorkflowStaticData('global');\n\nconst orderId = $json.orderId;\n\n// Find the order\nconst order = (staticData.orders || []).find(\n  o => o.orderId === orderId\n);\n\n// Check whether the order exists\nif (!order) {\n  return {\n    json: {\n      status: \"ERROR\",\n      message: \"Order not found in database\",\n      orderId: orderId\n    }\n  };\n}\n\n// Find the related customer\nconst customer = (staticData.customers || []).find(\n  c => c.customerId === order.customerId\n);\n\n// Find related order items\nconst items = (staticData.orderItems || []).filter(\n  i => i.orderId === orderId\n);\n\n// Check whether the customer exists\nif (!customer) {\n  return {\n    json: {\n      status: \"ERROR\",\n      message: \"Customer not found in database\",\n      orderId: orderId,\n      customerId: order.customerId\n    }\n  };\n}\n\n// Return consolidated order details (JOIN result)\nreturn {\n  json: {\n    orderId: order.orderId,\n    status: order.status,\n    customer: {\n      id: customer.customerId,\n      name: customer.name,\n      currentBalance: customer.currentBalance\n    },\n    orderDate: order.orderDate,\n    totalAmount: order.totalAmount,\n    lineItems: items\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        -112
+      ],
+      "id": "71cbce6c-759c-4a05-adeb-ff3dd2b5925a",
+      "name": "Code_QueryFullOrderJoin"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst item = $input.item.json;\n\n// Safely get line items\nconst lineItems = Array.isArray(item.lineItems)\n  ? item.lineItems\n  : [];\n\n// Return final transaction audit\nreturn {\n  json: {\n    auditEvent: \"ACID_TRANSACTION_COMMITTED\",\n    auditStatus: \"DATABASE_TRANSACTION_VERIFIED\",\n    orderId: item.orderId,\n    customerId: item.customer?.id,\n    customerName: item.customer?.name,\n    transactionStatus: item.status,\n    persistedTotal: item.totalAmount,\n    lineItemCount: lineItems.length,\n    customerBalance: item.customer?.currentBalance,\n    auditTimestamp: new Date().toISOString()\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1776,
+        -112
+      ],
+      "id": "0e89879b-fc50-4294-812e-2d0b382d523b",
+      "name": "Code_FinalTransactionAudit"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual_Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code_InitRelationalDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code_InitRelationalDB": {
+      "main": [
+        [
+          {
+            "node": "Code_StageIncomingOrder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code_StageIncomingOrder": {
+      "main": [
+        [
+          {
+            "node": "Code_InsertOrderHeader",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code_InsertOrderHeader": {
+      "main": [
+        [
+          {
+            "node": "Code_InsertOrderItems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code_InsertOrderItems": {
+      "main": [
+        [
+          {
+            "node": "Code_UpdateCustomerCredit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code_UpdateCustomerCredit": {
+      "main": [
+        [
+          {
+            "node": "IF_TransactionSucceeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_TransactionSucceeded": {
+      "main": [
+        [
+          {
+            "node": "Code_QueryFullOrderJoin",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log_RollbackAudit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code_QueryFullOrderJoin": {
+      "main": [
+        [
+          {
+            "node": "Code_FinalTransactionAudit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "bc2489b2-3067-488e-ac02-a3ce0976467a",
+  "meta": {
+    "instanceId": "a03c7678428ef19ededbf912f16f7d5798ec7b9ab4c17f2a2def6a9e791e7215"
+  },
+  "nodeGroups": [],
+  "id": "TMG2Iye3Lr6vYBMK",
+  "tags": []
+}
